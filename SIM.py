@@ -7,24 +7,26 @@ SCREEN_W   = 900
 SCREEN_H   = 500
 FPS        = 60
 PHYS_DT    = 0.01
-ROAD_SPEED = 250.0        # px / s
+ROAD_SPEED = 250.0
 
 # Physics (Math.py)
 M_CAR = 1500.0
-C1    = 15000.0
-K1    = 150000.0
+C1    = 1500.0
+K1    = 15000.0
+
+# 4 wheel x positions (left = rear of car, right = front)
+WX           = [160, 310, 540, 690]
+N_WHL        = len(WX)
+CAR_CENTER_X = (WX[0] + WX[-1]) // 2   # reference x for road sampling
 
 # Layout
-WHEEL_X      = 280
 ROAD_BASE_Y  = 400
-SCALE        = 800.0      # px per metre
-
-WHEEL_R      = 28         # wheel circle radius (px)
-BODY_W       = 120
+SCALE        = 800.0
+WHEEL_R      = 28
 BODY_H       = 35
+BODY_LEFT    = WX[0] - 35
+BODY_W       = (WX[-1] + 35) - BODY_LEFT
 EQUIL_SPRING = 110        # spring visual length at equilibrium (px)
-SPR_X        = WHEEL_X - 18   # spring x
-DMP_X        = WHEEL_X + 18   # damper x
 
 WHITE = (255, 255, 255)
 BLACK = (  0,   0,   0)
@@ -32,7 +34,7 @@ GRAY  = (160, 160, 160)
 
 pygame.init()
 screen  = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-pygame.display.set_caption("1-DOF Suspension")
+pygame.display.set_caption("4-Wheel Suspension (heave only)")
 clock   = pygame.time.Clock()
 font    = pygame.font.SysFont("Consolas", 14)
 
@@ -67,23 +69,24 @@ def draw_spring(y_top, y_bot, x, coils=6, half=10):
 def draw_damper(y_top, y_bot, x, cyl_h=26, cyl_w=12):
     if y_bot <= y_top + 4:
         return
-    mid     = (y_top + y_bot) // 2
-    cyl_y   = mid - cyl_h // 2
-    # rod above cylinder
-    pygame.draw.line(screen, BLACK, (x, y_top), (x, cyl_y), 2)
-    # cylinder body (filled gray + black outline)
-    pygame.draw.rect(screen, GRAY,  (x - cyl_w // 2, cyl_y, cyl_w, cyl_h))
-    pygame.draw.rect(screen, BLACK, (x - cyl_w // 2, cyl_y, cyl_w, cyl_h), 2)
-    # rod below cylinder
-    pygame.draw.line(screen, BLACK, (x, cyl_y + cyl_h), (x, y_bot), 2)
+    mid   = (y_top + y_bot) // 2
+    cyl_y = mid - cyl_h // 2
+    pygame.draw.line(screen, BLACK, (x, y_top),       (x, cyl_y),          2)
+    pygame.draw.rect(screen, GRAY,  (x - cyl_w//2, cyl_y, cyl_w, cyl_h))
+    pygame.draw.rect(screen, BLACK, (x - cyl_w//2, cyl_y, cyl_w, cyl_h),   2)
+    pygame.draw.line(screen, BLACK, (x, cyl_y+cyl_h), (x, y_bot),          2)
 
 
 # ── State ──────────────────────────────────────────────────────────────────────
-h_car_prev = h_car_curr = 0.0
-h_whl_prev = h_whl_curr = 0.0
+h_car_prev = 0.0
+h_car_curr = 0.0
+h_whl_prev = [0.0] * N_WHL
+h_whl_curr = [0.0] * N_WHL
+
 global_x = 0.0
 accum    = 0.0
 
+# ── Main loop ──────────────────────────────────────────────────────────────────
 running = True
 while running:
     frame_dt = min(clock.tick(FPS) / 1000.0, 0.1)
@@ -97,69 +100,71 @@ while running:
     accum += frame_dt
     while accum >= PHYS_DT:
         global_x  += ROAD_SPEED * PHYS_DT
-        h_whl_new  = road_profile(global_x)
+        h_whl_new  = [road_profile(global_x - CAR_CENTER_X + wx) for wx in WX]
+
+        # Discretised EOM: M*ẍ + 4K*x = Σ(K*h_whl_i + C*ḣ_whl_i)
+        sum_damp   = sum(h_whl_new[i] - h_whl_curr[i] for i in range(N_WHL))
+        sum_spring = sum(h_whl_new[i]                  for i in range(N_WHL))
 
         h_car_new = (
-            (2*M_CAR + C1*PHYS_DT) * h_car_curr
+            (2*M_CAR + N_WHL*C1*PHYS_DT) * h_car_curr
             - M_CAR * h_car_prev
-            + C1 * (h_whl_new - h_whl_curr) * PHYS_DT
-            + K1 * h_whl_new * PHYS_DT**2
-        ) / (M_CAR + C1*PHYS_DT + K1*PHYS_DT**2)
+            + C1 * sum_damp   * PHYS_DT
+            + K1 * sum_spring * PHYS_DT**2
+        ) / (M_CAR + N_WHL*C1*PHYS_DT + N_WHL*K1*PHYS_DT**2)
 
-        h_car_prev, h_car_curr = h_car_curr, h_car_new
-        h_whl_prev, h_whl_curr = h_whl_curr, h_whl_new
+        h_car_prev = h_car_curr
+        h_car_curr = h_car_new
+        h_whl_prev = h_whl_curr
+        h_whl_curr = h_whl_new
         accum -= PHYS_DT
-
-    # ── Pixel positions ────────────────────────────────────────────────────────
-    # Wheel center sits WHEEL_R above the road surface
-    road_surface_y = ROAD_BASE_Y - int(h_whl_curr * SCALE)
-    wheel_y        = road_surface_y - WHEEL_R
-
-    # Spring spans from bottom of car body (spr_top) to top of wheel (spr_bot)
-    # so it touches neither mass
-    spr_bot        = wheel_y - WHEEL_R
-    spring_len     = max(4, EQUIL_SPRING - int((h_whl_curr - h_car_curr) * SCALE))
-    spr_top        = spr_bot - spring_len
-    body_y         = spr_top - BODY_H   # car rectangle top
 
     # Road polyline
     road_pts = [
-        (sx, int(ROAD_BASE_Y - road_profile(global_x - WHEEL_X + sx) * SCALE))
+        (sx, int(ROAD_BASE_Y - road_profile(global_x - CAR_CENTER_X + sx) * SCALE))
         for sx in range(0, SCREEN_W + 4, 4)
     ]
+
+    # Car body pixel position (derived from h_car)
+    body_equil_y = ROAD_BASE_Y - 2*WHEEL_R - EQUIL_SPRING - BODY_H
+    body_y       = body_equil_y - int(h_car_curr * SCALE)
 
     # ── Render ──
     screen.fill(WHITE)
 
-    # Road surface
+    # Road
     poly = [(0, SCREEN_H), *road_pts, (SCREEN_W, SCREEN_H)]
     pygame.draw.polygon(screen, GRAY, poly)
     pygame.draw.lines(screen, BLACK, False, road_pts, 2)
 
-    # Horizontal connector plates at top and bottom of suspension
-    pygame.draw.line(screen, BLACK, (WHEEL_X - 22, spr_top), (WHEEL_X + 22, spr_top), 2)
-    pygame.draw.line(screen, BLACK, (WHEEL_X - 22, spr_bot), (WHEEL_X + 22, spr_bot), 2)
+    # Per-wheel suspension (drawn before masses so masses sit on top)
+    spr_top = body_y + BODY_H   # same for all wheels — bottom of car body
+    for wx, hw in zip(WX, h_whl_curr):
+        road_y_i  = ROAD_BASE_Y - int(hw * SCALE)
+        wheel_y_i = road_y_i  - WHEEL_R
+        spr_bot_i = wheel_y_i - WHEEL_R   # top of wheel circle
 
-    # Spring (left) and damper (right) — both anchored at spr_top / spr_bot
-    draw_spring(spr_top, spr_bot, SPR_X)
-    draw_damper(spr_top, spr_bot, DMP_X)
+        if spr_bot_i > spr_top + 4:
+            pygame.draw.line(screen, BLACK, (wx-22, spr_top),   (wx+22, spr_top),   2)
+            pygame.draw.line(screen, BLACK, (wx-22, spr_bot_i), (wx+22, spr_bot_i), 2)
+            draw_spring(spr_top, spr_bot_i, wx - 14)
+            draw_damper(spr_top, spr_bot_i, wx + 14)
 
-    # Wheel (circle) — drawn after suspension so the bottom plate sits on top
-    pygame.draw.circle(screen, WHITE, (WHEEL_X, wheel_y), WHEEL_R)
-    pygame.draw.circle(screen, BLACK, (WHEEL_X, wheel_y), WHEEL_R, 2)
+        # Wheel (filled white so spring doesn't show through)
+        pygame.draw.circle(screen, WHITE, (wx, wheel_y_i), WHEEL_R)
+        pygame.draw.circle(screen, BLACK, (wx, wheel_y_i), WHEEL_R, 2)
 
-    # Car body (rectangle) — drawn after suspension so the top plate is visible
-    pygame.draw.rect(screen, WHITE, (WHEEL_X - BODY_W // 2, body_y, BODY_W, BODY_H))
-    pygame.draw.rect(screen, BLACK, (WHEEL_X - BODY_W // 2, body_y, BODY_W, BODY_H), 2)
+    # Car body (filled white so spring tops don't show through)
+    pygame.draw.rect(screen, WHITE, (BODY_LEFT, body_y, BODY_W, BODY_H))
+    pygame.draw.rect(screen, BLACK, (BODY_LEFT, body_y, BODY_W, BODY_H), 2)
 
     # HUD
     lines = [
-        f"h_wheel: {h_whl_curr*100:+.1f} cm",
-        f"h_car  : {h_car_curr*100:+.1f} cm",
-        f"deflect: {(h_car_curr - h_whl_curr)*100:+.1f} cm",
+        f"body  : {h_car_curr*100:+.1f} cm",
+        f"W1..4 : " + "  ".join(f"{h*100:+.1f}" for h in h_whl_curr),
     ]
     for i, txt in enumerate(lines):
-        screen.blit(font.render(txt, True, BLACK), (SCREEN_W - 200, 10 + i * 18))
+        screen.blit(font.render(txt, True, BLACK), (10, 10 + i * 18))
 
     pygame.display.flip()
 

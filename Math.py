@@ -16,11 +16,16 @@ K1 = 1500  # N.s/m
 while t<=100:
 
    
-    h_Wheel.append(random.uniform(1,10))
+    h_Wheel.append(random.uniform(1,5))
 
     h_Car.append(((2*M_car + C1*dt)*h_Car[-1] - M_car*h_Car[-2] + C1*(h_Wheel[-1]-h_Wheel[-2])*dt + K1*h_Wheel[-1]*dt**2 - M_car*g*dt**2)/(M_car+C1*dt+K1*dt**2))
    
     t+=dt
+
+plt.plot(range(0, 10002), h_Wheel, label='Wheel Height')
+plt.plot(range(0, 10002), h_Car, label='Car Height')
+plt.legend()                                
+plt.show()
 
 
 

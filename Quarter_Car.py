@@ -4,9 +4,9 @@ import pygame
 # --- Physics (same as Math.py) ---
 g = 9.81  # Gravity
 dt = .01  # Time step
-M_car = 1500  # kg
-C1 = 0  # N/m
-K1 = 1500000  # N.s/m
+M_car = 300  # kg
+C1 = 1000  # N/m
+K1 = 150 # N.s/m
 
 CAR_SPEED = 8.0  # m/s, how fast the car drives along the road
 
@@ -55,6 +55,12 @@ h_Wheel = [road(0), road(0)]
 h_Car = [road(0) - SAG, road(0) - SAG]
 t = 0
 
+# Time histories for the live plot
+PLOT_WINDOW = 10.0  # seconds of history shown
+t_hist = []
+wheel_hist = []
+car_hist = []
+
 
 def step():
     """Advance the simulation by one dt using the equation from Math.py."""
@@ -65,6 +71,12 @@ def step():
     # Only the last two values are needed by the recurrence
     if len(h_Car) > 4:
         del h_Car[0], h_Wheel[0]
+
+    t_hist.append(t)
+    wheel_hist.append(h_Wheel[-1])
+    car_hist.append(h_Car[-1])
+    while t_hist[0] < t - PLOT_WINDOW:
+        del t_hist[0], wheel_hist[0], car_hist[0]
 
 
 # --- Visualization ---
@@ -79,12 +91,16 @@ SPRING_LEN = 90        # visual rest length of the spring/damper
 BODY_W, BODY_H = 180, 75
 SUBSTEPS = 2           # sim steps per frame
 
+PLOT_H = 230           # height of the live plot panel below the sim view
+
 SKY = (200, 225, 245)
 GROUND = (120, 90, 60)
 ROAD_LINE = (50, 50, 50)
 BODY_COLOR = (190, 40, 40)
 WHEEL_COLOR = (30, 30, 30)
 HARDWARE = (70, 70, 70)
+WHEEL_TRACE = (30, 90, 200)
+CAR_TRACE = (190, 40, 40)
 
 
 def world_to_screen_y(h):
@@ -117,6 +133,59 @@ def draw_damper(screen, x, y_top, y_bot):
     pygame.draw.line(screen, HARDWARE, (x - 8, mid + 8), (x + 8, mid + 8), 3)  # piston head
 
 
+def draw_plot(screen, font):
+    panel = pygame.Rect(0, HEIGHT, WIDTH, PLOT_H)
+    pygame.draw.rect(screen, (250, 250, 250), panel)
+    pygame.draw.line(screen, (100, 100, 100), (0, HEIGHT), (WIDTH, HEIGHT), 2)
+    if len(t_hist) < 2:
+        return
+
+    left, right = 70, WIDTH - 70
+    top, bot = HEIGHT + 18, HEIGHT + PLOT_H - 30
+    t_end = t_hist[-1]
+    t_start = t_end - PLOT_WINDOW
+
+    def series_range(hist):
+        """Each trace gets its own scale so both fill the panel and overlap."""
+        lo, hi = min(hist), max(hist)
+        if hi - lo < 0.02:  # keep a sensible scale when the trace is flat
+            mid = (hi + lo) / 2
+            lo, hi = mid - 0.01, mid + 0.01
+        pad = 0.08 * (hi - lo)
+        return lo - pad, hi + pad
+
+    wheel_lo, wheel_hi = series_range(wheel_hist)
+    car_lo, car_hi = series_range(car_hist)
+
+    def px(tv):
+        return left + (tv - t_start) / PLOT_WINDOW * (right - left)
+
+    def py(h, lo, hi):
+        return bot - (h - lo) / (hi - lo) * (bot - top)
+
+    pygame.draw.rect(screen, (170, 170, 170), pygame.Rect(left, top, right - left, bot - top), 1)
+    for frac in (0.0, 0.5, 1.0):  # gridlines: wheel scale on left, car scale on right
+        y = bot - frac * (bot - top)
+        pygame.draw.line(screen, (225, 225, 225), (left + 1, y), (right - 1, y))
+        wheel_label = font.render(f"{wheel_lo + frac * (wheel_hi - wheel_lo):6.2f}", True, WHEEL_TRACE)
+        screen.blit(wheel_label, (left - wheel_label.get_width() - 6, y - wheel_label.get_height() // 2))
+        car_label = font.render(f"{car_lo + frac * (car_hi - car_lo):6.2f}", True, CAR_TRACE)
+        screen.blit(car_label, (right + 6, y - car_label.get_height() // 2))
+    for tv in (t_start, t_end):
+        label = font.render(f"{tv:.1f} s", True, (90, 90, 90))
+        screen.blit(label, (px(tv) - label.get_width() // 2, bot + 6))
+
+    for hist, color, lo, hi in ((wheel_hist, WHEEL_TRACE, wheel_lo, wheel_hi),
+                                (car_hist, CAR_TRACE, car_lo, car_hi)):
+        points = [(px(tv), py(h, lo, hi)) for tv, h in zip(t_hist, hist)]
+        pygame.draw.lines(screen, color, False, points, 2)
+
+    legend_wheel = font.render("h_Wheel", True, WHEEL_TRACE)
+    legend_car = font.render("h_Car", True, CAR_TRACE)
+    screen.blit(legend_wheel, (left + 10, top + 6))
+    screen.blit(legend_car, (left + 10 + legend_wheel.get_width() + 20, top + 6))
+
+
 def draw_car(screen):
     wheel_cy = world_to_screen_y(h_Wheel[-1]) - WHEEL_R
     wheel_top = wheel_cy - WHEEL_R
@@ -135,7 +204,7 @@ def draw_car(screen):
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((WIDTH, HEIGHT + PLOT_H))
     pygame.display.set_caption("Quarter Car Model")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 24)
@@ -152,6 +221,7 @@ def main():
         screen.fill(SKY)
         draw_road(screen)
         draw_car(screen)
+        draw_plot(screen, font)
 
         hud = font.render(
             f"t = {t:6.2f} s    h_Wheel = {h_Wheel[-1]:5.2f} m    h_Car = {h_Car[-1]:5.2f} m",

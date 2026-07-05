@@ -1,172 +1,168 @@
-import pygame
-import sys
 import math
+import pygame
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-SCREEN_W   = 900
-SCREEN_H   = 500
-FPS        = 60
-PHYS_DT    = 0.01
-ROAD_SPEED = 250.0
+# --- Physics (same as Math.py) ---
+g = 9.81  # Gravity
+dt = .01  # Time step
+M_car = 1500  # kg
+C1 = 0  # N/m
+K1 = 1500000  # N.s/m
 
-# Physics (Math.py)
-M_CAR = 1500.0
-C1    = 1500.0
-K1    = 15000.0
-
-# 4 wheel x positions (left = rear of car, right = front)
-WX           = [160, 310, 540, 690]
-N_WHL        = len(WX)
-CAR_CENTER_X = (WX[0] + WX[-1]) // 2   # reference x for road sampling
-
-# Layout
-ROAD_BASE_Y  = 400
-SCALE        = 800.0
-WHEEL_R      = 28
-BODY_H       = 35
-BODY_LEFT    = WX[0] - 35
-BODY_W       = (WX[-1] + 35) - BODY_LEFT
-EQUIL_SPRING = 110        # spring visual length at equilibrium (px)
-
-WHITE = (255, 255, 255)
-BLACK = (  0,   0,   0)
-GRAY  = (160, 160, 160)
-
-pygame.init()
-screen  = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-pygame.display.set_caption("4-Wheel Suspension (heave only)")
-clock   = pygame.time.Clock()
-font    = pygame.font.SysFont("Consolas", 14)
+CAR_SPEED = 8.0  # m/s, how fast the car drives along the road
 
 
-def road_profile(gx):
-    x = gx % 2600.0
-    if 250 <= x < 420:
-        return 0.05 * math.sin(math.pi * (x - 250) / 170)
-    if 750 <= x < 1100:
-        return 0.03 * math.sin(2 * math.pi * (x - 750) / 175)
-    if 1400 <= x < 1440:
-        return 0.08 * (x - 1400) / 40
-    if 1440 <= x < 1700:
-        return 0.08
-    if 1700 <= x < 1740:
-        return 0.08 * (1.0 - (x - 1700) / 40)
-    return 0.0
+def _rand(cell, salt=0):
+    """Deterministic pseudo-random value in [0, 1) for a stretch of road."""
+    v = math.sin(cell * 12.9898 + salt * 78.233) * 43758.5453
+    return v - math.floor(v)
 
 
-def draw_spring(y_top, y_bot, x, coils=6, half=10):
-    if y_bot <= y_top + 4:
-        return
-    pts = [(x, y_top)]
-    segs = coils * 2
-    for i in range(1, segs + 1):
-        frac = i / segs
-        pts.append((x + (half if i % 2 else -half), int(y_top + frac * (y_bot - y_top))))
-    pts.append((x, y_bot))
-    pygame.draw.lines(screen, BLACK, False, pts, 2)
+FEATURE_SPACING = 4.0  # m, one possible rock/pothole per stretch of road
 
 
-def draw_damper(y_top, y_bot, x, cyl_h=26, cyl_w=12):
-    if y_bot <= y_top + 4:
-        return
-    mid   = (y_top + y_bot) // 2
-    cyl_y = mid - cyl_h // 2
-    pygame.draw.line(screen, BLACK, (x, y_top),       (x, cyl_y),          2)
-    pygame.draw.rect(screen, GRAY,  (x - cyl_w//2, cyl_y, cyl_w, cyl_h))
-    pygame.draw.rect(screen, BLACK, (x - cyl_w//2, cyl_y, cyl_w, cyl_h),   2)
-    pygame.draw.line(screen, BLACK, (x, cyl_y+cyl_h), (x, y_bot),          2)
+def road(x):
+    """Dirt road height (m) at position x (m). Replaces the random h_Wheel."""
+    # Gently rolling base surface, a few cm of undulation
+    h = (3
+         + 0.06 * math.sin(0.4 * x)
+         + 0.03 * math.sin(1.3 * x + 2.0)
+         + 0.015 * math.sin(3.1 * x + 0.7))
+    # Small rocks (bumps) and potholes (dips) at deterministic spots
+    cell = math.floor(x / FEATURE_SPACING)
+    for c in (cell - 1, cell, cell + 1):
+        if _rand(c) < 0.35:
+            continue  # smooth stretch, no feature here
+        center = (c + 0.15 + 0.7 * _rand(c, 1)) * FEATURE_SPACING
+        if _rand(c, 2) < 0.55:  # rock
+            amp = 0.03 + 0.05 * _rand(c, 3)
+            half_width = 0.15 + 0.15 * _rand(c, 4)
+        else:  # pothole
+            amp = -(0.06 + 0.09 * _rand(c, 3))
+            half_width = 0.35 + 0.35 * _rand(c, 4)
+        d = x - center
+        if abs(d) < half_width:
+            h += amp * 0.5 * (1 + math.cos(math.pi * d / half_width))
+    return h
 
 
-# ── State ──────────────────────────────────────────────────────────────────────
-h_car_prev = 0.0
-h_car_curr = 0.0
-h_whl_prev = [0.0] * N_WHL
-h_whl_curr = [0.0] * N_WHL
+# The gravity term in the update equation makes the body settle M_car*g/K1
+# below the wheel; this constant is added back when drawing so the body sits
+# above the wheel while keeping the equation itself untouched.
+SAG = M_car * g / K1
 
-global_x = 0.0
-accum    = 0.0
+# Start at steady state so there is no startup transient
+h_Wheel = [road(0), road(0)]
+h_Car = [road(0) - SAG, road(0) - SAG]
+t = 0
 
-# ── Main loop ──────────────────────────────────────────────────────────────────
-running = True
-while running:
-    frame_dt = min(clock.tick(FPS) / 1000.0, 0.1)
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-            running = False
+def step():
+    """Advance the simulation by one dt using the equation from Math.py."""
+    global t
+    h_Wheel.append(road(CAR_SPEED * t))
+    h_Car.append(((2*M_car + C1*dt)*h_Car[-1] - M_car*h_Car[-2] + C1*(h_Wheel[-1]-h_Wheel[-2])*dt + K1*h_Wheel[-1]*dt**2 - M_car*g*dt**2)/(M_car+C1*dt+K1*dt**2))
+    t += dt
+    # Only the last two values are needed by the recurrence
+    if len(h_Car) > 4:
+        del h_Car[0], h_Wheel[0]
 
-    accum += frame_dt
-    while accum >= PHYS_DT:
-        global_x  += ROAD_SPEED * PHYS_DT
-        h_whl_new  = [road_profile(global_x - CAR_CENTER_X + wx) for wx in WX]
 
-        # Discretised EOM: M*ẍ + 4K*x = Σ(K*h_whl_i + C*ḣ_whl_i)
-        sum_damp   = sum(h_whl_new[i] - h_whl_curr[i] for i in range(N_WHL))
-        sum_spring = sum(h_whl_new[i]                  for i in range(N_WHL))
+# --- Visualization ---
+WIDTH, HEIGHT = 1100, 650
+BASELINE = 620   # screen y of road height 0
+V_SCALE = 90     # pixels per meter, vertical
+H_SCALE = 60     # pixels per meter, horizontal
+CAR_X = WIDTH // 2  # car stays centered, road scrolls past
 
-        h_car_new = (
-            (2*M_CAR + N_WHL*C1*PHYS_DT) * h_car_curr
-            - M_CAR * h_car_prev
-            + C1 * sum_damp   * PHYS_DT
-            + K1 * sum_spring * PHYS_DT**2
-        ) / (M_CAR + N_WHL*C1*PHYS_DT + N_WHL*K1*PHYS_DT**2)
+WHEEL_R = 24
+SPRING_LEN = 90        # visual rest length of the spring/damper
+BODY_W, BODY_H = 180, 75
+SUBSTEPS = 2           # sim steps per frame
 
-        h_car_prev = h_car_curr
-        h_car_curr = h_car_new
-        h_whl_prev = h_whl_curr
-        h_whl_curr = h_whl_new
-        accum -= PHYS_DT
+SKY = (200, 225, 245)
+GROUND = (120, 90, 60)
+ROAD_LINE = (50, 50, 50)
+BODY_COLOR = (190, 40, 40)
+WHEEL_COLOR = (30, 30, 30)
+HARDWARE = (70, 70, 70)
 
-    # Road polyline
-    road_pts = [
-        (sx, int(ROAD_BASE_Y - road_profile(global_x - CAR_CENTER_X + sx) * SCALE))
-        for sx in range(0, SCREEN_W + 4, 4)
-    ]
 
-    # Car body pixel position (derived from h_car)
-    body_equil_y = ROAD_BASE_Y - 2*WHEEL_R - EQUIL_SPRING - BODY_H
-    body_y       = body_equil_y - int(h_car_curr * SCALE)
+def world_to_screen_y(h):
+    return BASELINE - h * V_SCALE
 
-    # ── Render ──
-    screen.fill(WHITE)
 
-    # Road
-    poly = [(0, SCREEN_H), *road_pts, (SCREEN_W, SCREEN_H)]
-    pygame.draw.polygon(screen, GRAY, poly)
-    pygame.draw.lines(screen, BLACK, False, road_pts, 2)
+def draw_road(screen):
+    points = []
+    for sx in range(0, WIDTH + 1, 2):
+        wx = CAR_SPEED * t + (sx - CAR_X) / H_SCALE
+        points.append((sx, world_to_screen_y(road(wx))))
+    pygame.draw.polygon(screen, GROUND, points + [(WIDTH, HEIGHT), (0, HEIGHT)])
+    pygame.draw.lines(screen, ROAD_LINE, False, points, 4)
 
-    # Per-wheel suspension (drawn before masses so masses sit on top)
-    spr_top = body_y + BODY_H   # same for all wheels — bottom of car body
-    for wx, hw in zip(WX, h_whl_curr):
-        road_y_i  = ROAD_BASE_Y - int(hw * SCALE)
-        wheel_y_i = road_y_i  - WHEEL_R
-        spr_bot_i = wheel_y_i - WHEEL_R   # top of wheel circle
 
-        if spr_bot_i > spr_top + 4:
-            pygame.draw.line(screen, BLACK, (wx-22, spr_top),   (wx+22, spr_top),   2)
-            pygame.draw.line(screen, BLACK, (wx-22, spr_bot_i), (wx+22, spr_bot_i), 2)
-            draw_spring(spr_top, spr_bot_i, wx - 14)
-            draw_damper(spr_top, spr_bot_i, wx + 14)
+def draw_spring(screen, x, y_top, y_bot, coils=6, half_width=11):
+    points = [(x, y_top)]
+    n = coils * 2
+    for i in range(1, n):
+        offset = half_width if i % 2 else -half_width
+        points.append((x + offset, y_top + (y_bot - y_top) * i / n))
+    points.append((x, y_bot))
+    pygame.draw.lines(screen, HARDWARE, False, points, 3)
 
-        # Wheel (filled white so spring doesn't show through)
-        pygame.draw.circle(screen, WHITE, (wx, wheel_y_i), WHEEL_R)
-        pygame.draw.circle(screen, BLACK, (wx, wheel_y_i), WHEEL_R, 2)
 
-    # Car body (filled white so spring tops don't show through)
-    pygame.draw.rect(screen, WHITE, (BODY_LEFT, body_y, BODY_W, BODY_H))
-    pygame.draw.rect(screen, BLACK, (BODY_LEFT, body_y, BODY_W, BODY_H), 2)
+def draw_damper(screen, x, y_top, y_bot):
+    mid = (y_top + y_bot) / 2
+    pygame.draw.line(screen, HARDWARE, (x, y_top), (x, mid + 8), 3)          # piston rod
+    pygame.draw.rect(screen, HARDWARE, (x - 8, mid, 16, y_bot - mid), 3)     # cylinder
+    pygame.draw.line(screen, HARDWARE, (x - 8, mid + 8), (x + 8, mid + 8), 3)  # piston head
 
-    # HUD
-    lines = [
-        f"body  : {h_car_curr*100:+.1f} cm",
-        f"W1..4 : " + "  ".join(f"{h*100:+.1f}" for h in h_whl_curr),
-    ]
-    for i, txt in enumerate(lines):
-        screen.blit(font.render(txt, True, BLACK), (10, 10 + i * 18))
 
-    pygame.display.flip()
+def draw_car(screen):
+    wheel_cy = world_to_screen_y(h_Wheel[-1]) - WHEEL_R
+    wheel_top = wheel_cy - WHEEL_R
+    body_bottom = world_to_screen_y(h_Car[-1] + SAG) - 2 * WHEEL_R - SPRING_LEN
 
-pygame.quit()
-sys.exit()
+    draw_spring(screen, CAR_X - 18, body_bottom, wheel_top)
+    draw_damper(screen, CAR_X + 18, body_bottom, wheel_top)
+
+    pygame.draw.circle(screen, WHEEL_COLOR, (CAR_X, int(wheel_cy)), WHEEL_R)
+    pygame.draw.circle(screen, (150, 150, 150), (CAR_X, int(wheel_cy)), WHEEL_R // 2)
+
+    body = pygame.Rect(0, 0, BODY_W, BODY_H)
+    body.midbottom = (CAR_X, int(body_bottom))
+    pygame.draw.rect(screen, BODY_COLOR, body, border_radius=8)
+
+
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    pygame.display.set_caption("Quarter Car Model")
+    clock = pygame.time.Clock()
+    font = pygame.font.SysFont(None, 24)
+
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                running = False
+
+        for _ in range(SUBSTEPS):
+            step()
+
+        screen.fill(SKY)
+        draw_road(screen)
+        draw_car(screen)
+
+        hud = font.render(
+            f"t = {t:6.2f} s    h_Wheel = {h_Wheel[-1]:5.2f} m    h_Car = {h_Car[-1]:5.2f} m",
+            True, (20, 20, 20))
+        screen.blit(hud, (12, 10))
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    pygame.quit()
+
+
+if __name__ == "__main__":
+    main()

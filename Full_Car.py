@@ -58,6 +58,17 @@ thetaS = []
 dt = 0.01
 t = 0
 
+while t <= 100:
+
+    if t  == 20:
+
+        zu1.append(5)
+        zu2.append(5)
+        zu3.append(5)
+        zu4.append(5)
+    
+    zs.append(k1*zu1[-1] + k2*zu2[-1] + k3*zu3[-1] + k4*zu4[-1]) - k1*(l*phiS[-1]-L1*phiS[-1]) - k2*(l*phiS[-1]+L2*thetaS[-1]) + k3*(l*phiS[-1]+L1*thetaS[-1]) + k4*(l*phiS[-1]-L2*thetaS[-1]) + c1*(zu1[-1]-zu1[-2])/dt + c2*(zu2[-1]-zu2[-2])/dt + c3*(zu3[-1]-zu3[-2])/dt + c4*(zu4[-1]-zu4[-2])/dt - c1*((l*phiS[-1]-L1*thetaS[-1])-(zs[-1]+l*phiS[-1]-L1*thetaS[-1]))/dt 
+
 
 
 

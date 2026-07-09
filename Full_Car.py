@@ -33,7 +33,7 @@ l  = 1
 L1 = 1
 L2 = 1
 
-
+ms = 500 #kg
 
 k1 = 1
 k2 = 1
@@ -67,7 +67,8 @@ while t <= 100:
         zu3.append(5)
         zu4.append(5)
     
-    zs.append(k1*zu1[-1] + k2*zu2[-1] + k3*zu3[-1] + k4*zu4[-1]) - k1*(l*phiS[-1]-L1*phiS[-1]) - k2*(l*phiS[-1]+L2*thetaS[-1]) + k3*(l*phiS[-1]+L1*thetaS[-1]) + k4*(l*phiS[-1]-L2*thetaS[-1]) + c1*(zu1[-1]-zu1[-2])/dt + c2*(zu2[-1]-zu2[-2])/dt + c3*(zu3[-1]-zu3[-2])/dt + c4*(zu4[-1]-zu4[-2])/dt - c1*((l*phiS[-1]-L1*thetaS[-1])-(zs[-1]+l*phiS[-1]-L1*thetaS[-1]))/dt 
+    zs.append(((k1*zu1[-1] + k2*zu2[-1] + k3*zu3[-1] + k4*zu4[-1]) - k1*(l*phiS[-1]-L1*phiS[-1]) - k2*(l*phiS[-1]+L2*thetaS[-1]) + k3*(l*phiS[-1]+L1*thetaS[-1]) + k4*(l*phiS[-1]-L2*thetaS[-1]) + c1*(zu1[-1]-zu1[-2])/dt + c2*(zu2[-1]-zu2[-2])/dt + c3*(zu3[-1]-zu3[-2])/dt + c4*(zu4[-1]-zu4[-2])/dt - c1*((l*phiS[-1]-L1*thetaS[-1])-(zs[-1]+l*phiS[-1]-L1*thetaS[-1]))/dt - c2*((l*phiS[-1]+L2*thetaS[-1])-(zs[-1]+l*phiS[-1]+L2*thetaS[-1]))/dt - c3*((-l*phiS[-1]-L1*thetaS[-1])-(zs[-1]-l*phiS[-1]-L1*thetaS[-1]))/dt - c4*((-l*phiS[-1]+L2*thetaS[-1])-(zs[-1]-l*phiS[-1]+L2*thetaS[-1]))/dt +2*ms*zs[-1]-ms*zs[-2])/((ms + (k1+k2+k3+k4)*dt**2) + dt*(c1+c2+c3+c4)))
+
 
 
 

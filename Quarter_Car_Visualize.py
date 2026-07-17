@@ -23,10 +23,10 @@ FEATURE_SPACING = 4.0  # m, one possible rock/pothole per stretch of road
 def road(x):
     """Dirt road height (m) at position x (m). Replaces the random h_Wheel."""
     # Gently rolling base surface, a few cm of undulation
-    h = (3
-         + 0.06 * math.sin(0.4 * x)
-         + 0.03 * math.sin(1.3 * x + 2.0)
-         + 0.015 * math.sin(3.1 * x + 0.7))
+    h = (0.06 * math.sin(0.4 * x)
+     + 0.03 * math.sin(1.3 * x + 2.0)
+     + 0.015 * math.sin(3.1 * x + 0.7))
+    
     # Small rocks (bumps) and potholes (dips) at deterministic spots
     cell = math.floor(x / FEATURE_SPACING)
     for c in (cell - 1, cell, cell + 1):

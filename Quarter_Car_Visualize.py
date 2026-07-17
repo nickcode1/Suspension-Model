@@ -2,7 +2,6 @@ import math
 import pygame
 
 # --- Physics (same as Math.py) ---
-g = 9.81  # Gravity
 dt = .01  # Time step
 M_car = 300  # kg
 C1 = 1000  # N/m
@@ -45,14 +44,9 @@ def road(x):
     return h
 
 
-# The gravity term in the update equation makes the body settle M_car*g/K1
-# below the wheel; this constant is added back when drawing so the body sits
-# above the wheel while keeping the equation itself untouched.
-SAG = M_car * g / K1
-
 # Start at steady state so there is no startup transient
 h_Wheel = [road(0), road(0)]
-h_Car = [road(0) - SAG, road(0) - SAG]
+h_Car = [road(0), road(0)]
 t = 0
 
 # Time histories for the live plot
@@ -66,7 +60,7 @@ def step():
     """Advance the simulation by one dt using the equation from Math.py."""
     global t
     h_Wheel.append(road(CAR_SPEED * t))
-    h_Car.append(((2*M_car + C1*dt)*h_Car[-1] - M_car*h_Car[-2] + C1*(h_Wheel[-1]-h_Wheel[-2])*dt + K1*h_Wheel[-1]*dt**2 - M_car*g*dt**2)/(M_car+C1*dt+K1*dt**2))
+    h_Car.append(((2*M_car + C1*dt)*h_Car[-1] - M_car*h_Car[-2] + C1*(h_Wheel[-1]-h_Wheel[-2])*dt + K1*h_Wheel[-1]*dt**2)/(M_car+C1*dt+K1*dt**2))
     t += dt
     # Only the last two values are needed by the recurrence
     if len(h_Car) > 4:
@@ -189,7 +183,7 @@ def draw_plot(screen, font):
 def draw_car(screen):
     wheel_cy = world_to_screen_y(h_Wheel[-1]) - WHEEL_R
     wheel_top = wheel_cy - WHEEL_R
-    body_bottom = world_to_screen_y(h_Car[-1] + SAG) - 2 * WHEEL_R - SPRING_LEN
+    body_bottom = world_to_screen_y(h_Car[-1]) - 2 * WHEEL_R - SPRING_LEN
 
     draw_spring(screen, CAR_X - 18, body_bottom, wheel_top)
     draw_damper(screen, CAR_X + 18, body_bottom, wheel_top)
